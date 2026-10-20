@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import './App.css'
 
 const API_URL = 'http://127.0.0.1:8000'
+const REFRESH_INTERVAL = 5000
 
 const navigation = [
   { label: 'Overview', icon: '▦', active: true },
@@ -22,11 +23,17 @@ function App() {
   const [apiStatus, setApiStatus] = useState('checking')
   const [overview, setOverview] = useState(null)
   const [apiError, setApiError] = useState('')
+  const [lastUpdated, setLastUpdated] = useState(null)
 
   useEffect(() => {
     let cancelled = false
+    let requestInProgress = false
 
     async function fetchOverview() {
+      if (requestInProgress) return
+
+      requestInProgress = true
+
       try {
         const [healthResponse, overviewResponse] = await Promise.all([
           fetch(`${API_URL}/api/health`),
@@ -47,32 +54,38 @@ function App() {
         )
         setOverview(overviewData)
         setApiError('')
+        setLastUpdated(new Date())
       } catch {
-        if (cancelled) return
-
-        setApiStatus('error')
-        setApiError(
-          'Could not reach the backend. Check that the FastAPI server is running.',
-        )
+        if (!cancelled) {
+          setApiStatus('error')
+          setApiError(
+            'Could not reach the backend. Check that FastAPI and Prometheus are running.',
+          )
+        }
+      } finally {
+        requestInProgress = false
       }
     }
 
     fetchOverview()
 
+    const intervalId = setInterval(fetchOverview, REFRESH_INTERVAL)
+
     return () => {
       cancelled = true
+      clearInterval(intervalId)
     }
   }, [])
 
-  const metrics = initialMetrics.map((metric) => {
-    const values = {
-      'HTTP REQUEST RATE': overview?.request_rate,
-      'P95 LATENCY': overview?.p95_latency_ms,
-      'FAILED REQUESTS': overview?.failed_requests_percent,
-      'ACTIVE VUS': overview?.active_vus,
-    }
+  const metricValues = {
+    'HTTP REQUEST RATE': overview?.request_rate,
+    'P95 LATENCY': overview?.p95_latency_ms,
+    'FAILED REQUESTS': overview?.failed_requests_percent,
+    'ACTIVE VUS': overview?.active_vus,
+  }
 
-    const value = values[metric.label]
+  const metrics = initialMetrics.map((metric) => {
+    const value = metricValues[metric.label]
 
     return {
       ...metric,
@@ -80,11 +93,15 @@ function App() {
       note:
         value == null
           ? metric.label === 'ACTIVE VUS'
-            ? 'No test running'
-            : 'Waiting for test data'
-          : 'Received from backend API',
+            ? 'No current sample'
+            : 'Waiting for metric data'
+          : 'Received from Prometheus',
     }
   })
+
+  const formattedUpdate = lastUpdated
+    ? lastUpdated.toLocaleTimeString()
+    : 'Waiting for first response'
 
   return (
     <div className="app-shell">
@@ -176,6 +193,7 @@ function App() {
                   ? 'Connecting...'
                   : 'API disconnected'}
             </span>
+
             <span className="user-avatar" aria-label="Local user">
               PC
             </span>
@@ -241,7 +259,7 @@ function App() {
             </div>
 
             <span className="panel-tag">
-              {overview && apiStatus === 'connected'
+              {apiStatus === 'connected' && overview
                 ? 'API CONNECTED'
                 : 'NO DATA'}
             </span>
@@ -249,11 +267,13 @@ function App() {
 
           <div className="empty-chart">
             <div className="empty-chart-icon">⌁</div>
-            <strong>No metrics available</strong>
+            <strong>No time-series chart available</strong>
             <p>
               {overview?.message ||
-                'Connect a k6 test to Prometheus to populate this chart.'}
+                'Waiting for performance metrics from Prometheus.'}
             </p>
+            <p>Last updated: {formattedUpdate}</p>
+            <p>Refresh interval: 5 seconds</p>
           </div>
         </section>
 
@@ -263,6 +283,7 @@ function App() {
               <h2>Test runs</h2>
               <p>Execution history for this workspace</p>
             </div>
+
             <span className="panel-tag">0 RUNS</span>
           </div>
 
@@ -280,8 +301,8 @@ function App() {
           <span>
             Local development ·{' '}
             {apiStatus === 'connected'
-              ? 'Backend connected'
-              : 'Metrics not connected'}
+              ? `Metrics polling active · Updated ${formattedUpdate}`
+              : 'Metrics connection unavailable'}
           </span>
         </footer>
       </main>
