@@ -1,5 +1,8 @@
 
+import { useEffect, useState } from 'react'
 import './App.css'
+
+const API_URL = 'http://127.0.0.1:8000'
 
 const navigation = [
   { label: 'Overview', icon: '▦', active: true },
@@ -8,14 +11,81 @@ const navigation = [
   { label: 'Thresholds', icon: '⌁', active: false },
 ]
 
-const metrics = [
-  { label: 'HTTP REQUEST RATE', value: '—', unit: 'req/s', note: 'Waiting for test data' },
-  { label: 'P95 LATENCY', value: '—', unit: 'ms', note: 'Waiting for test data' },
-  { label: 'FAILED REQUESTS', value: '—', unit: '%', note: 'Waiting for test data' },
-  { label: 'ACTIVE VUS', value: '0', unit: 'users', note: 'No test running' },
+const initialMetrics = [
+  { label: 'HTTP REQUEST RATE', value: '—', unit: 'req/s' },
+  { label: 'P95 LATENCY', value: '—', unit: 'ms' },
+  { label: 'FAILED REQUESTS', value: '—', unit: '%' },
+  { label: 'ACTIVE VUS', value: '0', unit: 'users' },
 ]
 
 function App() {
+  const [apiStatus, setApiStatus] = useState('checking')
+  const [overview, setOverview] = useState(null)
+  const [apiError, setApiError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function fetchOverview() {
+      try {
+        const [healthResponse, overviewResponse] = await Promise.all([
+          fetch(`${API_URL}/api/health`),
+          fetch(`${API_URL}/api/overview`),
+        ])
+
+        if (!healthResponse.ok || !overviewResponse.ok) {
+          throw new Error('Backend returned an unsuccessful response.')
+        }
+
+        const healthData = await healthResponse.json()
+        const overviewData = await overviewResponse.json()
+
+        if (cancelled) return
+
+        setApiStatus(
+          healthData.status === 'healthy' ? 'connected' : 'error',
+        )
+        setOverview(overviewData)
+        setApiError('')
+      } catch {
+        if (cancelled) return
+
+        setApiStatus('error')
+        setApiError(
+          'Could not reach the backend. Check that the FastAPI server is running.',
+        )
+      }
+    }
+
+    fetchOverview()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const metrics = initialMetrics.map((metric) => {
+    const values = {
+      'HTTP REQUEST RATE': overview?.request_rate,
+      'P95 LATENCY': overview?.p95_latency_ms,
+      'FAILED REQUESTS': overview?.failed_requests_percent,
+      'ACTIVE VUS': overview?.active_vus,
+    }
+
+    const value = values[metric.label]
+
+    return {
+      ...metric,
+      value: value == null ? metric.value : String(value),
+      note:
+        value == null
+          ? metric.label === 'ACTIVE VUS'
+            ? 'No test running'
+            : 'Waiting for test data'
+          : 'Received from backend API',
+    }
+  })
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -28,6 +98,7 @@ function App() {
         </a>
 
         <div className="workspace-label">WORKSPACE</div>
+
         <div className="workspace-switcher">
           <span className="workspace-avatar">D</span>
           <span className="workspace-name">
@@ -38,6 +109,7 @@ function App() {
         </div>
 
         <div className="nav-section-label">MONITORING</div>
+
         <nav className="navigation" aria-label="Main navigation">
           {navigation.map((item) => (
             <a
@@ -53,12 +125,29 @@ function App() {
 
         <div className="sidebar-bottom">
           <div className="system-status">
-            <span className="status-indicator idle" />
+            <span
+              className={`status-indicator ${
+                apiStatus === 'connected' ? 'online' : 'idle'
+              }`}
+            />
             <span>
-              <strong>Test engine idle</strong>
-              <small>No active test session</small>
+              <strong>
+                {apiStatus === 'checking'
+                  ? 'Checking backend'
+                  : apiStatus === 'connected'
+                    ? 'Backend connected'
+                    : 'Backend unavailable'}
+              </strong>
+              <small>
+                {apiStatus === 'connected'
+                  ? 'FastAPI health check passed'
+                  : apiStatus === 'checking'
+                    ? 'Checking API connection'
+                    : 'Check the local API server'}
+              </small>
             </span>
           </div>
+
           <div className="sidebar-version">
             <span>PulseCheck</span>
             <span>LOCAL DEV</span>
@@ -73,12 +162,23 @@ function App() {
             <span>/</span>
             <strong>Overview</strong>
           </div>
+
           <div className="topbar-meta">
             <span className="connection-label">
-              <span className="status-indicator idle" />
-              Local environment
+              <span
+                className={`status-indicator ${
+                  apiStatus === 'connected' ? 'online' : 'idle'
+                }`}
+              />
+              {apiStatus === 'connected'
+                ? 'API connected'
+                : apiStatus === 'checking'
+                  ? 'Connecting...'
+                  : 'API disconnected'}
             </span>
-            <span className="user-avatar" aria-label="Local user">PC</span>
+            <span className="user-avatar" aria-label="Local user">
+              PC
+            </span>
           </div>
         </header>
 
@@ -88,25 +188,45 @@ function App() {
             <h1>Overview</h1>
             <p>Inspect test execution and application performance.</p>
           </div>
+
           <button
             className="primary-button"
             type="button"
-            onClick={() => document.getElementById('test-runs')?.scrollIntoView({ behavior: 'smooth' })}
+            onClick={() =>
+              document
+                .getElementById('test-runs')
+                ?.scrollIntoView({ behavior: 'smooth' })
+            }
           >
             <span>＋</span> View test runs
           </button>
         </section>
 
-        <section className="metrics-grid" aria-label="Current performance metrics">
+        {apiError && (
+          <div className="api-error" role="alert">
+            {apiError}
+          </div>
+        )}
+
+        <section
+          className="metrics-grid"
+          aria-label="Current performance metrics"
+        >
           {metrics.map((metric) => (
             <article className="metric-card" key={metric.label}>
               <div className="metric-label">{metric.label}</div>
+
               <div className="metric-reading">
                 <strong>{metric.value}</strong>
                 <span>{metric.unit}</span>
               </div>
+
               <div className="metric-note">
-                <span className="status-indicator idle" />
+                <span
+                  className={`status-indicator ${
+                    apiStatus === 'connected' ? 'online' : 'idle'
+                  }`}
+                />
                 {metric.note}
               </div>
             </article>
@@ -119,13 +239,21 @@ function App() {
               <h2>Request metrics</h2>
               <p>Time-series data from the selected test run</p>
             </div>
-            <span className="panel-tag">NO DATA</span>
+
+            <span className="panel-tag">
+              {overview && apiStatus === 'connected'
+                ? 'API CONNECTED'
+                : 'NO DATA'}
+            </span>
           </div>
 
           <div className="empty-chart">
             <div className="empty-chart-icon">⌁</div>
             <strong>No metrics available</strong>
-            <p>Run a k6 test and connect its output to Prometheus to populate this chart.</p>
+            <p>
+              {overview?.message ||
+                'Connect a k6 test to Prometheus to populate this chart.'}
+            </p>
           </div>
         </section>
 
@@ -149,7 +277,12 @@ function App() {
 
         <footer className="page-footer">
           <span>PulseCheck / Performance tooling</span>
-          <span>Local development · Metrics not connected</span>
+          <span>
+            Local development ·{' '}
+            {apiStatus === 'connected'
+              ? 'Backend connected'
+              : 'Metrics not connected'}
+          </span>
         </footer>
       </main>
     </div>
